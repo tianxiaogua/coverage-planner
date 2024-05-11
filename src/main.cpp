@@ -2,82 +2,112 @@
 
 #define DENSE_PATH 1
 
-int main(){
 
+/**
+ * 对图像进行处理，膨胀边界和障碍物
+*/
+cv::Mat Contour_treatment(cv::Mat &img)
+{
     // cv::Mat img = cv::imread("../data/basement.png");
-    cv::Mat img = cv::imread("../data/test1.png");
+    
+    cv::imshow("原图像", img);
+    cv::waitKey(500);
     cv::Mat gray;
-    cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY); // 把图像修改为二进制灰度图
 
-    cv::Mat img_ = gray.clone();
+    cv::Mat img_ = gray.clone(); // 储存二进制灰度图
 
-    cv::threshold(img_, img_, 250, 255, 0);
+    cv::threshold(img_, img_, 250, 255, 0); // 去除灰度图上的噪点
     std::cout<<"去掉噪，例如过滤很小或很大像素值的图像点。"<<std::endl;
 
-    cv::Mat erode_kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(10,10), cv::Point(-1,-1)); // size: robot radius
-    cv::morphologyEx(img_, img_, cv::MORPH_ERODE, erode_kernel);
-    
-    cv::Mat open_kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5,5), cv::Point(-1,-1));
-    cv::morphologyEx(img_, img_, cv::MORPH_OPEN, open_kernel);
+    cv::Mat erode_kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(10,10), cv::Point(-1,-1)); // 返回元素卷积核
+    cv::morphologyEx(img_, img_, cv::MORPH_ERODE, erode_kernel); // 对卷积图像做边界的膨胀
+    cv::imshow("边界膨胀", img_);
+    cv::waitKey();
+    cv::Mat open_kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5,5), cv::Point(-1,-1)); // 返回元素卷积核
+    cv::morphologyEx(img_, img_, cv::MORPH_OPEN, open_kernel); // 对卷积图像做开运算，做腐蚀处理
     std::cout<<"返回一个结构元素（卷积核）"<<std::endl;
-    cv::imshow("返回一个结构元素（卷积核）", img_);
-    // cv::waitKey();
-    cv::waitKey(1000);
-    std::vector<std::vector<cv::Point>> cnts;
-    std::vector<cv::Vec4i> hierarchy; // index: next, prev, first_child, parent
-    cv::findContours(img_, cnts, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+    cv::imshow("腐蚀处理", img_);
+    cv::waitKey();
+    // cv::waitKey(500);
+    return img_;
+}
+
+/**
+ * 对图像进行处理，圈出边界和各个障碍物，得到数组数据
+*/
+void Circle_boundary(cv::Mat &img_, cv::Mat &img, std::vector<std::vector<cv::Point>> &contours)
+{
+    /*** 查找图像的轮廓，输出为输出的轮廓集合，每个轮廓由一系列点组成。输出的轮廓层次结构，用于表示轮廓之间的父子关系。 ****/
+    std::vector<std::vector<cv::Point>> cnts; // 储存多个多边形的轮廓外形数据
+    std::vector<cv::Vec4i> hierarchy; // 配合多边形轮廓数组，保存多个多边形的内外父子关系 index: next, prev, first_child, parent
+    cv::findContours(img_, cnts, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE); // 找到轮廓数据和父子关系并储存在变量中
     std::cout<<"在二值图像中检测轮廓。它可以将图像中的连续区域(通常是物体)提取出来，形成一个轮廓集合"<<std::endl;
 
-    std::vector<int> cnt_indices(cnts.size());
-    std::iota(cnt_indices.begin(), cnt_indices.end(), 0);
-    std::sort(cnt_indices.begin(), cnt_indices.end(), [&cnts](int lhs, int rhs){return cv::contourArea(cnts[lhs]) > cv::contourArea(cnts[rhs]);});
-    int ext_cnt_idx = cnt_indices.front();
+    /***对多边形数据转存排序******************/
+    std::vector<int> cnt_indices(cnts.size()); // 转存多边形数据
+    std::iota(cnt_indices.begin(), cnt_indices.end(), 0); // 为cnt_indices批量赋值为0
+    std::sort(cnt_indices.begin(), cnt_indices.end(), [&cnts](int lhs, int rhs){return cv::contourArea(cnts[lhs]) > cv::contourArea(cnts[rhs]);}); // 排序 
+    int ext_cnt_idx = cnt_indices.front(); // 返回的是第一个元素的引用
 
-    cv::Mat cnt_canvas = img.clone();
-    cv::drawContours(cnt_canvas, cnts, ext_cnt_idx, cv::Scalar(0,0,255)); // 轮廓绘制
-    std::vector<std::vector<cv::Point>> contours;
-    contours.emplace_back(cnts[ext_cnt_idx]);
+    /***展示外部边界***********************/
+    cv::Mat cnt_canvas = img.clone(); // 复制原图像
+    cv::drawContours(cnt_canvas, cnts, ext_cnt_idx, cv::Scalar(0,0,255)); // 在原图像上绘制轮廓
+    cv::imshow("绘制外部边界", cnt_canvas);
+    cv::waitKey();
 
-    ///////////////////////////////////////////////////////////////////////
-    // find all the contours of obstacle
-    for(int i = 0; i < hierarchy.size(); i++){
-        if(hierarchy[i][3]==ext_cnt_idx){ // parent contour's index equals to external contour's index
+    /***展示内部障碍物边界***********************/
+    // std::vector<std::vector<cv::Point>> contours; 转而使用外部输入
+    contours.emplace_back(cnts[ext_cnt_idx]); // 把处理好的cnts轮廓数据添加到新的轮廓变量中
+    // 找到所有的轮廓的障碍物
+    for(int i = 0; i < hierarchy.size(); i++){ // 找到最外围的父轮廓，里面的子轮廓就是障碍物
+        if(hierarchy[i][3]==ext_cnt_idx){ //父轮廓的索引等于外部轮廓的索引
             contours.emplace_back(cnts[i]);
-            cv::drawContours(cnt_canvas, cnts, i, cv::Scalar(255,0,0));
+            cv::drawContours(cnt_canvas, cnts, i, cv::Scalar(255,0,0)); // 把障碍的轮廓绘制到图像中展示
         }
     }
     cv::imshow("找到所有的障碍物轮廓", cnt_canvas);
     std::cout<<"找到所有的障碍物轮廓"<<std::endl;
-    // cv::waitKey();
-    cv::waitKey(1000);
-    ///////////////////////////////////////////////////////////////////////
+    cv::waitKey();
+    // cv::waitKey(1000);
+
+    //////////////////////////////仅做展示，展示障碍物边界，不参与逻辑/////////////////////////////////////////
     cv::Mat cnt_img = cv::Mat(img.rows, img.cols, CV_8UC3);
     cnt_img.setTo(255);
     for(int i = 0; i < contours.size(); i++){
         cv::drawContours(cnt_img, contours, i, cv::Scalar(0,0,0));
     }
-    cv::imshow("只保留轮廓的图形", cnt_img);
+    cv::imshow("展示只保留轮廓的图形", cnt_img);
     std::cout<<"处理后只保留轮廓的图形"<<std::endl;
-    // cv::waitKey();
-    cv::waitKey(1000);
-    ///////////////////////////////////////////////////////////////////////
+    cv::waitKey();
+    // cv::waitKey(1000);
+    ////////////////////////////仅做展示，不参与逻辑 end///////////////////////////////////////////
+}
+
+/**
+ * 对边界和障碍物的外形抽象成简单的多边形
+*/
+void Polygon_approximation(cv::Mat &img_, 
+                            cv::Mat &img, 
+                            std::vector<std::vector<cv::Point>> &contours, 
+                            std::vector<std::vector<cv::Point>> &polys)
+{
+    /***处理内部边界，对每个内部图形的边界做转换简单多边形的逼近操作，把边界转换成简单多边形边界***********************/
     cv::Mat poly_canvas = img.clone();
-    std::vector<cv::Point> poly;
-    std::vector<std::vector<cv::Point>> polys;
+    std::vector<cv::Point> poly; // 储存外部简单多边形边界
+    // std::vector<std::vector<cv::Point>> polys; // 储存内部障碍物轮廓多边形边界
     for(auto& contour : contours){
-        cv::approxPolyDP(contour, poly, 3, true);
+        cv::approxPolyDP(contour, poly, 3, true); // 对每个内部轮廓都做处理，变为更逼近的多边形外形
         polys.emplace_back(poly);
         poly.clear();
     }
     for(int i = 0; i < polys.size(); i++){
         cv::drawContours(poly_canvas, polys, i, cv::Scalar(255,0,255));
+        cv::imshow("多边形逼近", poly_canvas);
+        std::cout<<"将复杂的多边形转换成简单的多边形"<<std::endl;
+        cv::waitKey(500);
     }
-    cv::imshow("多边形逼近", poly_canvas);
-    std::cout<<"将复杂的多边形转换成简单的多边形"<<std::endl;
-    // cv::waitKey();
-    cv::waitKey(1000);
-
-    ///////////////////////////////////////////////////////////////////////
+    /////////////仅做展示，展示内部多边形边界//////////////////////////////////////////////////////////
     cv::Mat poly_img = cv::Mat(img.rows, img.cols, CV_8UC3);
     poly_img.setTo(255);
     for(int i = 0; i < polys.size(); i++){
@@ -88,21 +118,17 @@ int main(){
     // cv::waitKey();
     cv::waitKey(1000);
 
-    ///////////////////////////////////////////////////////////////////////
-    // 完成了前期的处理，计算主要的路径规划
-    // compute main direction
-
-    // [0,180)
-    std::vector<int> line_deg_histogram(180);
-    double line_len; // weight
-    double line_deg;
-    int line_deg_idx;
-
+    /***找到地图外部的边界线，储存在变量中***********************/
+    std::vector<int> line_deg_histogram(180); // 用于保存外部边界的角度数据
+    double line_len; // 直线长度
+    double line_deg; // DEG角度 直线角度
+    int line_deg_idx; // 索引、指示
     cv::Mat line_canvas = img.clone();
-    auto ext_poly = polys.front();
-    ext_poly.emplace_back(ext_poly.front());
+    auto ext_poly = polys.front(); // 储存内部障碍物轮廓多边形边界
+
+    ext_poly.emplace_back(ext_poly.front()); // 数组赋值
     for(int i = 1; i < ext_poly.size(); i++){
-        line_len = std::sqrt(std::pow((ext_poly[i].x-ext_poly[i-1].x),2)+std::pow((ext_poly[i].y-ext_poly[i-1].y),2));
+        line_len = std::sqrt(std::pow((ext_poly[i].x-ext_poly[i-1].x),2)+std::pow((ext_poly[i].y-ext_poly[i-1].y),2)); // 计算边界长度
         // y-axis towards up, x-axis towards right, theta is from x-axis to y-axis
         line_deg = std::round(atan2(-(ext_poly[i].y-ext_poly[i-1].y),(ext_poly[i].x)-ext_poly[i-1].x)/M_PI*180.0); // atan2: (-180, 180]
         line_deg_idx = (int(line_deg) + 180) % 180; // [0, 180)
@@ -110,21 +136,27 @@ int main(){
 
        std::cout<<"deg: "<<line_deg_idx<<std::endl;
        cv::line(line_canvas, ext_poly[i], ext_poly[i-1], cv::Scalar(255,255,0));
-       cv::imshow("lines",line_canvas);
-    //    cv::waitKey();
+       cv::imshow("生成最外围地图线",line_canvas);
+       cv::waitKey();
     }
     cv::imshow("生成最外围地图线",line_canvas);
     // cv::waitKey();
     cv::waitKey(1000);
-    ///////////////////////////////////////////////////////////////////////
+    
 
-    auto it = std::max_element(line_deg_histogram.begin(), line_deg_histogram.end());
+    auto it = std::max_element(line_deg_histogram.begin(), line_deg_histogram.end()); // 求数组中的最大值
     int main_deg = (it-line_deg_histogram.begin());
-    std::cout<<"main deg: "<<main_deg<<std::endl;
+    std::cout<<"main deg: " << main_deg<<std::endl;
+}
 
-
+void cell_decomposition(cv::Mat &img_, 
+                        cv::Mat &img, 
+                        std::vector<std::vector<cv::Point>> &polys, // 储存内部障碍物轮廓多边形边界
+                        std::vector<Polygon_2> &bcd_cells // 用于储存被分解出来的细胞部分
+                        )
+{
     // construct polygon with holes
-    std::cout<<"用孔构建多边形"<<std::endl;
+    std::cout<<"用细胞结构建多边形"<<std::endl;
 
     std::vector<cv::Point> outer_poly = polys.front();
     polys.erase(polys.begin());
@@ -148,7 +180,7 @@ int main(){
     ///////////////////////////////////////////////////////////////////////
     // cell decomposition
 
-    std::vector<Polygon_2> bcd_cells;
+    // std::vector<Polygon_2> bcd_cells; // 用于储存被分解出来的细胞部分
     std::cout<<"细胞分解化分解中..........."<<std::endl;
 //    polygon_coverage_planning::computeBestTCDFromPolygonWithHoles(pwh, &bcd_cells);
     polygon_coverage_planning::computeBestBCDFromPolygonWithHoles(pwh, &bcd_cells);
@@ -156,24 +188,25 @@ int main(){
 
     ////////////////////////////下面仅仅演示细胞路径/////////////////////////////////////////////
     // test decomposition
-    // std::vector<std::vector<cv::Point>> bcd_polys;
-    // std::vector<cv::Point> bcd_poly;
+    std::vector<std::vector<cv::Point>> bcd_polys;
+    std::vector<cv::Point> bcd_poly;
 
-    // for(const auto& cell:bcd_cells){
-    //     for(int i = 0; i < cell.size(); i++){
-    //         bcd_poly.emplace_back(cv::Point(CGAL::to_double(cell[i].x()), CGAL::to_double(cell[i].y())));
-    //     }
-    //     bcd_polys.emplace_back(bcd_poly);
-    //     bcd_poly.clear();
-    // }
-
-    // for(int i = 0; i < bcd_polys.size(); i++){
-    //     cv::drawContours(poly_img, bcd_polys, i, cv::Scalar(255,0,255));
-    //     cv::imshow("bcd 展示细胞化分解图片的过程", poly_img);
-    //     cv::waitKey(30);
-    // }
-    // cv::imshow("bcd 展示细胞化分解图片的最终结果", poly_img);
-    // cv::waitKey();
+    for(const auto& cell:bcd_cells){
+        for(int i = 0; i < cell.size(); i++){
+            bcd_poly.emplace_back(cv::Point(CGAL::to_double(cell[i].x()), CGAL::to_double(cell[i].y())));
+        }
+        bcd_polys.emplace_back(bcd_poly);
+        bcd_poly.clear();
+    }
+    cv::Mat poly_img = cv::Mat(img.rows, img.cols, CV_8UC3);
+    poly_img.setTo(255);
+    for(int i = 0; i < bcd_polys.size(); i++){
+        cv::drawContours(poly_img, bcd_polys, i, cv::Scalar(255,0,255));
+        cv::imshow("bcd 展示细胞化分解图片的过程", poly_img);
+        cv::waitKey(30);
+    }
+    cv::imshow("bcd 展示细胞化分解图片的最终结果", poly_img);
+    cv::waitKey();
     ///////end test decomposition//////////////////////////////////////////////////////////////////////////////.
 
     ////////////////////////////下面仅仅演示构造邻图/////////////////////////////////////////////
@@ -194,8 +227,20 @@ int main(){
 //        }
 //        std::cout<<std::endl<<std::endl;
 //    }
-    
-    auto cell_graph = calculateDecompositionAdjacency(bcd_cells);
+}
+
+/**计算细胞之间的连接路径*/
+void calculate_cell_path(cv::Mat &img_,  
+                         cv::Mat &img, 
+                         std::vector<Polygon_2> &bcd_cells, // 用于储存被分解出来的细胞部分
+                         std::vector<CellNode> &cell_graph, // 对外输出细胞图
+                         std::vector<std::vector<Point_2>> &cells_sweeps,
+                         std::vector<std::map<int, std::list<Point_2 >>> &cell_intersections,
+                         Point_2 &start,
+                         std::deque<int> &cell_idx_path
+                        )
+{
+    cell_graph = calculateDecompositionAdjacency(bcd_cells); // 计算得到细胞图
     for(auto& cell:cell_graph){
         std::cout<<"cell "<<cell.cellIndex<<" 's neighbors: ";
         for(auto& neighbor:cell.neighbor_indices){
@@ -205,11 +250,13 @@ int main(){
     }
     std::cout<< "计算分解邻接......." << std::endl;
     
-    Point_2 start = getStartingPoint(img); // 从窗口上获取一个路径启始位置
+    // Point_2 start;
+    start = getStartingPoint(img); // 从窗口上获取一个路径启始位置
     std::cout<< "getStartingPoint" << std::endl;
-    int starting_cell_idx = getCellIndexOfPoint(bcd_cells, start); // 定义路径打起始位置
+    int starting_cell_idx = getCellIndexOfPoint(bcd_cells, start); // 定义路径起始位置
     std::cout<< "获取行进路径: " << starting_cell_idx << std::endl;
-    auto cell_idx_path = getTravellingPath(cell_graph, starting_cell_idx); // 定义 细胞路径索引
+    // std::deque<int> cell_idx_path;
+    cell_idx_path = getTravellingPath(cell_graph, starting_cell_idx); // 定义 细胞路径索引,每个路径点的排序
     std::cout<<"path length: "<<cell_idx_path.size()<<std::endl;
     std::cout<<"start";
     for(auto& cell_idx:cell_idx_path){
@@ -218,9 +265,9 @@ int main(){
     std::cout<< "计算分解邻接完成" << std::endl;
     // cv::waitKey();
 
-    int sweep_step = 10;
+    int sweep_step = 10; // 分割间隙参数
 
-    std::vector<std::vector<Point_2>> cells_sweeps;
+    // std::vector<std::vector<Point_2>> cells_sweeps;
 
     for (size_t i = 0; i < bcd_cells.size(); ++i) {
         // Compute all cluster sweeps. 计算所有细胞内的路径规划
@@ -237,7 +284,7 @@ int main(){
     ////////下面部分仅仅用于展示//////////////////////////////////////////////////////////
     // 用于分别展示每个细胞框架内的路径规划，下面部分仅仅用于展示
     cv::Point prev, curr;
-    cv::Mat poly_img_ = poly_img.clone();
+    cv::Mat poly_img_ = img.clone();
     for(size_t i = 0; i < cells_sweeps.size(); ++i){
         for(size_t j = 1; j < cells_sweeps[i].size(); ++j){
             prev = cv::Point(CGAL::to_double(cells_sweeps[i][j-1].x()),CGAL::to_double(cells_sweeps[i][j-1].y()));
@@ -248,10 +295,8 @@ int main(){
             // cv::waitKey(0);
             cv::waitKey(30);
         }
-        poly_img_ = poly_img.clone();
     }
-    cv::imshow("规划完成细胞内部路径", poly_img_);
-    cv::waitKey();
+    // cv::waitKey();
     //////////展示结束//////////////////////////////////////////////////////
 
     ////////////////仅展示代码过程//////////////////////
@@ -263,8 +308,8 @@ int main(){
     //     cv::drawContours(poly_img, bcd_polys, cell_graph[i].cellIndex, cv::Scalar(0, 0, 255));
     // }
     // cv::waitKey();
-    ////////////////////////////////////////////////////
-    auto cell_intersections = calculateCellIntersections(bcd_cells, cell_graph);
+    // std::vector<std::map<int, std::list<Point_2 >>> cell_intersections;
+    cell_intersections = calculateCellIntersections(bcd_cells, cell_graph);
 
 //    for(size_t i = 0; i < cell_intersections.size(); ++i){
 //        for(auto j = cell_intersections[i].begin(); j != cell_intersections[i].end(); ++j){
@@ -276,6 +321,31 @@ int main(){
 //        }
 //        std::cout<<std::endl<<std::endl;
 //    }
+
+}
+
+int main(){
+    cv::Mat img = cv::imread("../data/test1.png");
+
+    cv::Mat img_ = Contour_treatment(img); // 对图像进行处理，膨胀边界和障碍物
+
+    std::vector<std::vector<cv::Point>> contours; // 保存障碍物位置
+    Circle_boundary(img_, img, contours); // 对图像进行处理，圈出边界和各个障碍物，得到数组数据
+    
+    std::vector<std::vector<cv::Point>> polys; // 储存内部障碍物轮廓多边形边界
+    Polygon_approximation(img_, img, contours, polys); // 对边界和障碍物的外形抽象成简单的多边形
+    
+    std::vector<Polygon_2> bcd_cells; // 用于储存被分解出来的细胞部分
+    cell_decomposition(img_, img, polys, bcd_cells); // 把图形分割成一个个细胞块
+
+    ///////////////////////////////////////////////////////////////////////
+    std::vector<CellNode> cell_graph; // 对外输出细胞图
+    std::vector<std::vector<Point_2>> cells_sweeps;
+    std::vector<std::map<int, std::list<Point_2 >>> cell_intersections;
+    Point_2 start;
+    std::deque<int> cell_idx_path;
+    calculate_cell_path(img_, img, bcd_cells, cell_graph, cells_sweeps, cell_intersections, start, cell_idx_path);
+    ////////////////////////////////////////////////////
 
     std::vector<Point_2> way_points;
 
@@ -359,9 +429,9 @@ int main(){
     }
 
     cv::Point p1, p2;
-    cv::namedWindow("cover",cv::WINDOW_NORMAL);
-    cv::imshow("cover", img);
-    cv::waitKey();
+    // cv::namedWindow("cover",cv::WINDOW_NORMAL);
+    // cv::imshow("cover", img);
+    // cv::waitKey();
     for(size_t i = 1; i < way_points.size(); ++i){
         p1 = cv::Point(CGAL::to_double(way_points[i-1].x()),CGAL::to_double(way_points[i-1].y()));
         p2 = cv::Point(CGAL::to_double(way_points[i].x()),CGAL::to_double(way_points[i].y()));
